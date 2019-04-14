@@ -6,7 +6,7 @@
 --#######################################--
 -------------------------------------------
 
-function JAM_Garage:GetSharedObject(obj) self.ESX = obj; ESX = obj; end
+function JAM_VehicleShop:GetSharedObject(obj) self.ESX = obj; ESX = obj; end
 
 -------------------------------------------
 --#######################################--
@@ -16,7 +16,7 @@ function JAM_Garage:GetSharedObject(obj) self.ESX = obj; ESX = obj; end
 --#######################################--
 -------------------------------------------
 
-function JAM_Garage:UpdateMarkers()
+function JAM_VehicleShop:UpdateMarkers()
     if not self or not self.Config or not self.Config.Markers then return; end
 
     for key,val in pairs(self.Config.Markers) do
@@ -26,7 +26,7 @@ function JAM_Garage:UpdateMarkers()
     end
 end
 
-function JAM_Garage:UpdateBlips()
+function JAM_VehicleShop:UpdateBlips()
     if not self or not self.Config or not self.Config.Blips then return; end
 
     for key,val in pairs(self.Config.Blips) do
@@ -51,17 +51,15 @@ end
 --#######################################--
 -------------------------------------------
 
-function JAM_Garage:CheckPosition()
+function JAM_VehicleShop:CheckPosition()
     if not self or not self.Config or not self.Config.Markers then return; end
 
     self.StandingInMarker = self.StandingInMarker or false
-    self.CurrentGarage = self.CurrentGarage or {}
 
     local standingInMarker = false
 
     for key,val in pairs(self.Config.Markers) do
         if GetDistanceBetweenCoords(GetEntityCoords(PlayerPedId()), val.Pos.x, val.Pos.y, val.Pos.z) < val.Scale.x then
-            self.CurrentGarage = val
             standingInMarker = true
         end
     end
@@ -69,14 +67,17 @@ function JAM_Garage:CheckPosition()
     if standingInMarker and not self.StandingInMarker then
         self.StandingInMarker = true
         self.ActionData = ActionData or {};
-        self.ActionData.Action = self.CurrentGarage.Zone            
-        self.ActionData.Message = 'Press ~INPUT_PICKUP~ to open the ' .. (self.CurrentGarage.Zone:sub(1,1):lower()..self.CurrentGarage.Zone:sub(2)) .. '.'
+        self.ActionData.Action = true        
+        self.ActionData.Message = 'Press ~INPUT_PICKUP~ to access the vehicle store.'
     end
 
     if not standingInMarker and self.StandingInMarker then
         self.StandingInMarker = false
         self.ActionData.Action = false
-        self.ESX.UI.Menu.CloseAll()
+
+        if not self.seatedInVehicle then
+            self.ESX.UI.Menu.CloseAll()
+        end
     end
 end
 
@@ -89,18 +90,18 @@ end
 --#######################################--
 -------------------------------------------
 
-function JAM_Garage:CheckInput()
+function JAM_VehicleShop:CheckInput()
     if not self or not self.ActionData then return; end
 
     self.Timer = self.Timer or 0
 
-    if self.ActionData.Action ~= false then
+    if self.ActionData.Action then
         SetTextComponentFormat('STRING')
         AddTextComponentString(self.ActionData.Message)
         DisplayHelpTextFromStringLabel(0, 0, 1, -1)
 
         if IsControlPressed(0, self.Config.Keys['E']) and (GetGameTimer() - self.Timer) > 150 then
-            self:OpenGarageMenu(self.ActionData.Action)
+            self:OpenShopMenu()
             self.ActionData.Action = false
             self.Timer = GetGameTimer()
         end
@@ -110,273 +111,221 @@ end
 -------------------------------------------
 --#######################################--
 --##                                   ##--
---##            Garage Menu            ##--
+--##             Shop Menus            ##--
 --##                                   ##--
 --#######################################--
 -------------------------------------------
 
-function JAM_Garage:OpenGarageMenu(zone)
-    if not self or not self.ESX then return; end
+function JAM_VehicleShop:OpenShopMenu()
+    if not self or not self.ESX or not ESX then return; end
 
     self.ESX.UI.Menu.CloseAll()
 
     local elements = {}
-    table.insert(elements,{label = "List Vehicles: " .. zone, value = zone .. "_List"})
-    table.insert(elements,{label = "Store Vehicle: " .. zone, value = zone .. "_Vehicle"})
+
+    for k,v in pairs(self.categoryList) do
+        table.insert(elements,{label = v.category:sub(1,1):upper() .. v.category:sub(2)})
+    end
 
     self.ESX.UI.Menu.Open(
-        'default', GetCurrentResourceName(), zone .. "_Menu",
-        {
-            title = zone,
-            align = 'top-left',
-            elements = elements,
-        },
+    'default', GetCurrentResourceName(), "Auto_Dealer",
+    {
+        title = "Auto Dealer",
+        align = 'top-left',
+        elements = elements,
+    },
 
-        function(data, menu)
-            menu.close()
-            if string.find(data.current.value, "_List") then
-                self:OpenVehicleList(zone)
+    function(data, menu)
+        menu.close()
+        for k,v in pairs(self.categoryList) do
+            if data.current.label == v.category:sub(1,1):upper() .. v.category:sub(2) then
+                self:OpenVehicleList(data.current.label)
             end
-
-            if string.find(data.current.value, "_Vehicle") then
-                self:StoreVehicle(zone)
-            end
-        end,
-        function(data, menu)
-            menu.close()
-            self.ActionData.Action = self.CurrentGarage.Zone  
         end
+    end,
+    function(data, menu)
+        menu.close()        
+        if self.seatedInVehicle then
+            self.ActionData.Action = false
+            self:DeleteSpawnedVehicles() 
+        else
+            self.ActionData.Action = true
+        end
+    end
+    )
+end
+
+function JAM_VehicleShop:OpenVehicleList(category)
+    if not self or not self.ESX or not ESX then return; end
+    local _category = category:sub(1,1):lower() .. category:sub(2)
+    self.ESX.UI.Menu.CloseAll()
+
+    local elements = {}
+
+    for k,v in pairs(self.sortedList) do
+        for _k,_v in pairs(v) do
+            if _v.category == _category then
+                table.insert(elements,{label = _v.name .. " : $" .. _v.price, value = _v})
+            end
+        end
+    end
+
+    self.ESX.UI.Menu.Open(
+    'default', GetCurrentResourceName(), category,
+    {
+        title = category,
+        align = 'top-left',
+        elements = elements,
+    },
+
+    function(data, menu)                -- model                xpos            ypos        zpos        heading
+
+        menu.close()
+        self:DeleteSpawnedVehicles()
+
+        local playerPed = PlayerPedId()
+
+        ESX.Game.SpawnLocalVehicle(data.current.value.model, {x = -47.570, y = -1097.221, z = 25.422}, -20.0, function (vehicle)
+
+            TaskWarpPedIntoVehicle(playerPed, vehicle, -1)
+            FreezeEntityPosition(vehicle, true)
+            table.insert(self.spawnedVehicles, {veh = vehicle})
+            self.seatedInVehicle = true
+            self:OpenPurchaseMenu(data.current.value)
+        end)
+    end,
+
+    function(data, menu)
+        menu.close()
+        self:OpenShopMenu()
+    end
+    )
+end
+
+function JAM_VehicleShop:OpenPurchaseMenu(vehicle)
+    print("OPEN BUY MENU")
+    if not self or not self.ESX or not ESX then return; end
+    print(vehicle.name, vehicle.price)
+
+    self.ESX.UI.Menu.CloseAll()
+
+    local elements = {}
+    local playerPed = PlayerPedId()
+
+    table.insert(elements, {label = "Buy : $" .. vehicle.price, value = 'Buy'})
+
+    self.ESX.UI.Menu.Open(
+    'default', GetCurrentResourceName(), "Purhcase",
+    {
+        title = "Purhcase",
+        align = 'top-left',
+        elements = elements,
+    },
+    function(data, menu)
+
+        menu.close()
+        if data.current.value == 'Buy' then
+            self:DeleteSpawnedVehicles()
+
+            ESX.TriggerServerCallback('JAM_VehicleShop:HasEnoughMoney', function(valid) 
+                if valid then
+                    ESX.Game.SpawnVehicle(vehicle.model, {x = -47.570, y = -1097.221, z = 25.422}, -20.0, function (veh)     
+                        menu.close()
+            
+                        TaskWarpPedIntoVehicle(playerPed, veh, -1)    
+                        local vehicleProps = ESX.Game.GetVehicleProperties(veh)
+                        TriggerServerEvent('JAM_VehicleShop:SetVehicleOwnership', vehicleProps)
+
+                        TriggerEvent('esx:showNotification', "You have purchased a new vehicle.")                        
+                    end)
+                else
+                    TriggerEvent('esx:showNotification', "You don't have enough money.")
+                end
+            end, vehicle.price)            
+        end
+    end,  
+
+    function(data, menu)
+        menu.close()
+        self:OpenVehicleList(vehicle.category)
+    end
     )
 end
 
 -------------------------------------------
 --#######################################--
 --##                                   ##--
---##         Vehicle List Menu         ##--
+--##     Delete Vehicles Function      ##--
+--##                                   ##--
+--#######################################--
+-------------------------------------------
+    
+
+function JAM_VehicleShop:DeleteSpawnedVehicles()
+    while #self.spawnedVehicles > 0 do
+        for k,v in pairs(self.spawnedVehicles) do
+            ESX.Game.DeleteVehicle(v.veh)
+            table.remove(self.spawnedVehicles, 1)
+        end
+        Citizen.Wait(0)
+    end
+end
+
+-------------------------------------------
+--#######################################--
+--##                                   ##--
+--##         Retrieve Shop Data        ##--
 --##                                   ##--
 --#######################################--
 -------------------------------------------
 
-function JAM_Garage:OpenVehicleList(zone)
-    if not self or not self.ESX or not ESX then return; end
 
-    local elements = {}
-    ESX.TriggerServerCallback('JAM_Garage:GetVehicles', function(vehicles)
-        for key,val in pairs(vehicles) do
-            local hashVehicle = val.vehicle.model
-            local vehiclePlate = val.plate
-            local vehicleName = GetDisplayNameFromVehicleModel(hashVehicle)
-            local labelvehicle
+function JAM_VehicleShop:GetShopData()
+    ESX.TriggerServerCallback('JAM_VehicleShop:GetVehiclesAndCategories', function(vehicles, categories)
+        self.vehicleList = vehicles
+        self.categoryList = categories
 
-            if val.state == 1 then
-                labelvehicle = vehiclePlate .. " : " .. vehicleName .. " : Garage"            
-            elseif val.state == 2 then
-                labelvehicle = vehiclePlate .. " : " .. vehicleName .. " : Impound"      
-            else                
-                labelvehicle = vehiclePlate .. " : " .. vehicleName .. " : Unknown"      
-            end 
-
-            table.insert(elements, {label =labelvehicle , value = val})            
-        end
-
-        self.ESX.UI.Menu.Open(
-        'default', GetCurrentResourceName(), 'Spawn_Vehicle',
-        {
-            title    = 'Garage',
-            align    = 'top-left',
-            elements = elements,
-        },
-
-        function(data, menu)
-            if zone == 'Garage' then
-                if data.current.value.state == 1 then
-                    menu.close()
-                    JAM_Garage:SpawnVehicle(data.current.value.vehicle)
-                else
-                    TriggerEvent('esx:showNotification', 'Your vehicle is not in the garage.')
-                end
-            end
-
-            if zone == 'Impound' then
-                if data.current.value.state == 2 then
-                    menu.close()
-                    JAM_Garage:SpawnVehicle(data.current.value.vehicle)
-                else
-                    TriggerEvent('esx:showNotification', 'Your vehicle is not impounded.')
-                end
-            end
-        end,
-
-        function(data, menu)
-            menu.close()
-            self:OpenGarageMenu(zone)
-        end
-    )   
+        self:SortVehiclesToCategory(vehicles, categories)
     end)
 end
 
--------------------------------------------
---#######################################--
---##                                   ##--
---##      Spawn vehicle function       ##--
---##                                   ##--
---#######################################--
--------------------------------------------
-
-function JAM_Garage:SpawnVehicle(vehicle)
-    if not self or not self.ESX or not ESX then return; end
-    self.DrivenVehicles = self.DrivenVehicles or {}
-
-    ESX.Game.SpawnVehicle(vehicle.model,{
-        x=self.CurrentGarage.Pos.x,
-        y=self.CurrentGarage.Pos.y,
-        z=self.CurrentGarage.Pos.z + 1,                                         
-        },self.CurrentGarage.Heading, function(callback_vehicle)
-        self.ESX.Game.SetVehicleProperties(callback_vehicle, vehicle)
-        SetVehRadioStation(callback_vehicle, "OFF")
-        SetVehicleHasBeenOwnedByPlayer(callback_vehicle, true)
-        SetEntityAsMissionEntity(callback_vehicle, true, true)
-        TaskWarpPedIntoVehicle(GetPlayerPed(-1), callback_vehicle, -1)
-        table.insert(self.DrivenVehicles, {vehicle = callback_vehicle})
-        local vehicleProps = self.ESX.Game.GetVehicleProperties(callback_vehicle)
-        TriggerServerEvent('JAM_Garage:ChangeState', vehicleProps.plate, 0)
-        self.ActionData.Action = self.CurrentGarage.Zone  
-    end) 
-end
-
--------------------------------------------
---#######################################--
---##                                   ##--
---##      Store vehicle function       ##--
---##                                   ##--
---#######################################--
--------------------------------------------
-
-function JAM_Garage:StoreVehicle(zone)
-    if not self or not self.CurrentGarage or not ESX or not self.ESX then return; end
-
-    local playerPed = GetPlayerPed()
-    local vehicle = GetLastDrivenVehicle(playerPed)   
-
-    if not vehicle then return; end
-
-    local vehicleProps = self.ESX.Game.GetVehicleProperties(vehicle)
-    local maxPassengers = GetVehicleMaxNumberOfPassengers(vehicle)
-
-    for seat = -1,maxPassengers-1,1 do
-        local ped = GetPedInVehicleSeat(vehicle,seat)
-        if ped and ped ~= 0 then TaskLeaveVehicle(ped,vehicle,16); end
-    end
-
-    while true do
-        if not IsPedInVehicle(GetPlayerPed(), vehicle, false) then
-            ESX.TriggerServerCallback('JAM_Garage:StoreVehicle', function(valid)
-                if(valid) then
-                    DeleteVehicle(vehicle)
-                    if zone == 'Impound' then 
-                        storage = 2
-                    else 
-                        storage = 1 
-                    end
-
-                    TriggerServerEvent('JAM_Garage:ChangeState', vehicleProps.plate, storage);
-                    TriggerEvent('esx:showNotification', 'Your vehicle has been stored.')
-                else
-                    TriggerEvent('esx:showNotification', "You don't own this vehicle.")
-                end
-            end, vehicleProps)
-
-            self.ActionData.Action = self.CurrentGarage.Zone  
-            break
-        end
-
-        Citizen.Wait(0)      
-    end
-end
-
--------------------------------------------
---#######################################--
---##                                   ##--
---##      Vehicle Check Function       ##--
---##     This automatically sends      ##--
---##    vehicles back to the garage    ##--
---##      when they are likely to      ##--
---##       be trapped in "limbo"       ##--
---##                                   ##--
---#######################################--
--------------------------------------------
-
-function JAM_Garage:LoginCheck()
-    if not ESX then return; end
-
-    ESX.TriggerServerCallback('JAM_Garage:GetVehicles', function(vehicles)
-        for key,val in pairs(vehicles) do
-            if val.state == 0 or val.state == nil then  
-                TriggerServerEvent('JAM_Garage:ChangeState', val.plate, 1)
-            end      
-        end        
-    end)
-end
-
-function JAM_Garage:VehicleCheck()    
-    if not self or not self.ESX or not ESX then return; end
-
-    for key,val in pairs(self.DrivenVehicles) do
-        local vehicleProps = self.ESX.Game.GetVehicleProperties(val.vehicle)
-        local maxPassengers = GetVehicleMaxNumberOfPassengers(val.vehicle)
-        local canDelete = true
-
-        for seat = -1,maxPassengers-1,1 do
-            if not IsVehicleSeatFree(val.vehicle, seat) then canDelete = false; end
-        end
-
-        if canDelete then
-            ESX.TriggerServerCallback('JAM_Garage:StoreVehicle', function(valid)
-                if valid and GetDistanceBetweenCoords(GetEntityCoords(PlayerPedId()), GetEntityCoords(val.vehicle)) > self.Config.VehicleDespawnDistance then
-                    for seat = -1,maxPassengers-1,1 do
-                        local ped = GetPedInVehicleSeat(val.vehicle,seat)
-                        if ped and ped ~= 0 then TaskLeaveVehicle(ped,vehicle,16); end
-                    end
-
-                    ESX.Game.DeleteVehicle(val.vehicle)                    
-                    TriggerServerEvent('JAM_Garage:ChangeState', vehicleProps.plate, 1);
-                end
-            end, vehicleProps)
+function JAM_VehicleShop:SortVehiclesToCategory(vehiclelist, categorylist)
+    local sortedList = {}
+    for k,v in pairs(categorylist) do
+        for _k,_v in pairs(vehiclelist) do
+            if _v.category == v.category then
+                table.insert(sortedList, {category = v.category, vehicle = _v})
+            end
         end
     end
+
+    self.sortedList = sortedList
 end
 
 -------------------------------------------
 --#######################################--
 --##                                   ##--
---##        Garage Update Thread       ##--
+--##     VehicleShop Update Thread     ##--
 --##                                   ##--
 --#######################################--
 -------------------------------------------
 
-function JAM_Garage:Update()
+function JAM_VehicleShop:Update()
     Citizen.Wait(1000)
     TriggerEvent('esx:getSharedObject', function(...) self:GetSharedObject(...); end);
 
     Citizen.Wait(1000)
-    TriggerServerEvent('JAM_Garage:Startup')
-
-    Citizen.Wait(1000)
     
     self.tick = 0
-    self.DrivenVehicles = {}
-
-    self:UpdateBlips()     
-    self:LoginCheck()
+    self.sortedList = {}
+    self.spawnedVehicles = {}
+    self:GetShopData()
+    self:UpdateBlips()
 
     while true do
         self:UpdateMarkers()
         self:CheckPosition()
         self:CheckInput()
-
-        if self.tick % 1000 == 0 then 
-            self:VehicleCheck()
-        end
 
         self.tick = self.tick + 1
 
@@ -384,4 +333,4 @@ function JAM_Garage:Update()
     end
 end
 
-Citizen.CreateThread(function(...) JAM_Garage:Update(...); end)
+Citizen.CreateThread(function(...) JAM_VehicleShop:Update(...); end)

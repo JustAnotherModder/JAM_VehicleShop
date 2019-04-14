@@ -1,73 +1,55 @@
-JAM_Garage = {}
+JAM_VehicleShop = {}
 
 TriggerEvent('esx:getSharedObject', function(obj) ESX = obj end)	
 
-function JAM_Garage:GetPlayerVehicles(identifier)	
-	local playerVehicles = {}
-	local data = MySQL.Sync.fetchAll("SELECT * FROM owned_vehicles WHERE owner=@identifier",{['@identifier'] = identifier})	
-	for key,val in pairs(data) do
-		local playerVehicle = json.decode(val.vehicle)
-		table.insert(playerVehicles, {owner = val.owner, veh = val.vehicle, vehicle = playerVehicle, plate = val.plate, state = val.state})
-	end
-	return playerVehicles
-end
+ESX.RegisterServerCallback('JAM_VehicleShop:GetVehiclesAndCategories', function(source, cb)
+	local vehicles = {}
+	local categories = {}
+	local data = MySQL.Sync.fetchAll("SELECT * FROM vehicles")
 
-ESX.RegisterServerCallback('JAM_Garage:StoreVehicle', function(source, cb, vehicleProps)
-	local isFound = false
-	local xPlayer = ESX.GetPlayerFromId(source)
+	for k,v in pairs(data) do
+		local canAdd = true
 
-	if not xPlayer then return; end
-
-	local playerVehicles = JAM_Garage:GetPlayerVehicles(xPlayer.getIdentifier())
-	local plate = vehicleProps.plate
-
-	for key,val in pairs(playerVehicles) do
-		if(plate == val.plate) then
-			local vehProps = json.encode(vehicleProps)
-			MySQL.Sync.execute("UPDATE owned_vehicles SET vehicle=@vehProps WHERE plate=@plate",{['@vehProps'] = vehProps, ['@plate'] = val.plate})
-			isFound = true
-			break
+		for _k,_v in pairs(categories) do
+			if(v.category == _v.category) then
+				canAdd = false
+			end
 		end
+
+		if canAdd then
+			table.insert(categories,{category = v.category})
+		end
+
+		table.insert(vehicles,{name = v.name, model = v.model, price = v.price, category = v.category})
 	end
-	cb(isFound)
+	cb(vehicles, categories)
 end)
 
-ESX.RegisterServerCallback('JAM_Garage:GetVehicles', function(source, cb)
+ESX.RegisterServerCallback('JAM_VehicleShop:HasEnoughMoney', function(source, cb, amount)
 	local xPlayer = ESX.GetPlayerFromId(source)
-
 	if not xPlayer then return; end
 
-	local vehicles = JAM_Garage:GetPlayerVehicles(xPlayer.getIdentifier())
+	local hasEnough = false
+	local playerId = xPlayer.getIdentifier()	
 
-	cb(vehicles)
+	if xPlayer.getMoney() >= amount then
+		xPlayer.removeMoney(amount)
+		hasEnough = true
+	end
+	cb(hasEnough)
 end)
 
-RegisterNetEvent('JAM_Garage:ChangeState')
-AddEventHandler('JAM_Garage:ChangeState', function(plate, state)
+RegisterServerEvent('JAM_VehicleShop:SetVehicleOwnership')
+AddEventHandler('JAM_VehicleShop:SetVehicleOwnership', function(vehicleProps)
 	local xPlayer = ESX.GetPlayerFromId(source)
-
 	if not xPlayer then return; end
 
-	local vehicles = JAM_Garage:GetPlayerVehicles(xPlayer.getIdentifier())
-	for key,val in pairs(vehicles) do
-		if(plate == val.plate) then
-			MySQL.Sync.execute("UPDATE owned_vehicles SET state =@state WHERE plate=@plate",{['@state'] = state , ['@plate'] = plate})
-			break
-		end		
-	end
+	MySQL.Async.execute('INSERT INTO owned_vehicles (owner, plate, vehicle, stored, jamstate) VALUES (@owner, @plate, @vehicle, @stored, @state)',
+	{
+		['@owner']   = xPlayer.identifier,
+		['@plate']   = vehicleProps.plate,
+		['@vehicle'] = json.encode(vehicleProps),
+		['@stored']	 = 0,
+		['@state']	 = 0,
+	})
 end)
-
-function JAM_Garage.Startup()
-	local data = MySQL.Sync.fetchAll("SELECT * FROM owned_vehicles")
-	for key,val in pairs(data) do
-	  	if val.state == nil then
-	   		MySQL.Sync.fetchAll("ALTER TABLE `owned_vehicles` ADD `state` int(11) NOT NULL DEFAULT 0;")
-	  	elseif type(val.state) ~= "number" then
-	   		MySQL.Sync.fetchAll("ALTER TABLE `owned_vehicles` MODIFY COLUMN `state` int(11) NOT NULL DEFAULT 0;")
-	   	end
-	  	return
-	end
-end
-
-RegisterNetEvent('JAM_Garage:Startup')
-AddEventHandler('JAM_Garage:Startup', JAM_Garage.Startup)
